@@ -1,12 +1,22 @@
 import React from 'react';
 import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, } from 'react-native';
-import { GiftedChat, Bubble } from 'react-native-gifted-chat';
+import { GiftedChat, Bubble, InputToolbar, SystemMessage } from 'react-native-gifted-chat';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from '@react-native-community/netinfo';
 
 //const firebase = require('firebase');
 //require('firebase/firestore');
 import firebase from 'firebase/app';
 import "firebase/auth";
 import 'firebase/firestore';
+
+
+// declare empty offline alert system message
+let offlineAlert = {
+    _id: 1,
+    text: "",
+    system: true,
+};
 
 export default class Chat extends React.Component {
     constructor() {
@@ -18,8 +28,10 @@ export default class Chat extends React.Component {
                 _id: '',
                 name: '',
             },
+            isConnected: false,
             loggedInText: "Please wait. You’re being authenticated",
         }
+
         // Firebase configuration
         const firebaseConfig = {
             apiKey: "AIzaSyChoYxenzsyjW5MVC4SaxM_wF_vci1Pt9Y",
@@ -49,7 +61,9 @@ export default class Chat extends React.Component {
         this.referenceChatMessages = firebase.firestore().collection("messages");
     }
 
+    //Get the data
     onCollectionUpdate = (querySnapshot) => {
+        if (!this.state.isConnected) return;
         const messages = [];
         // go through each document
         querySnapshot.forEach((doc) => {
@@ -79,62 +93,102 @@ export default class Chat extends React.Component {
         });
     }
 
+    async getMessages() {
+        let messages = '';
+        try {
+            messages = await AsyncStorage.getItem('messages') || [];
+            this.setState({
+                messages: JSON.parse(messages)
+            });
+        } catch (error) {
+            console.log(error.message);
+        }
+    }
+
+    async saveMessages() {
+        try {
+            await AsyncStorage.setItem('messages', JSON.stringify(this.state.messages));
+        } catch (error) {
+            console.log(error.message);
+        }
+    }
+
+    async deleteMessages() {
+        try {
+            await AsyncStorage.removeItem('messages');
+            this.setState({
+                messages: []
+            })
+        } catch (error) {
+            console.log(error.message);
+        }
+    }
+
 
     componentDidMount() {
         let name = this.props.route.params.name;
         this.props.navigation.setOptions({ title: name });
-        /*this.setState({
-            messages: [
-                {
+        // this.getMessages();
+
+        // check if online
+        NetInfo.fetch().then((connection) => {
+            if (connection.isConnected) {
+                this.setState({
+                    isConnected: true,
+                });
+
+                this.authUnsubscribe = firebase.auth().onAuthStateChanged((user) => {
+                    if (!user) {
+                        firebase.auth().signInAnonymously();
+                    }
+                    this.setState({
+                        uid: user.uid,
+                        messages: [],
+                        user: {
+                            _id: user.uid,
+                            name: name,
+                        },
+                        loggedInText: "Hello there!"
+                    });
+                    this.referenceChatMessagesUser = firebase.firestore().collection("messages").where("uid", "==", this.state.uid);
+                    this.unsubscribeMessagesUser = this.referenceChatMessagesUser.onSnapshot(this.onCollectionUpdate);
+                    /*this.unsubscribe = this.referenceChatMessages
+                        .orderBy("createdAt", "desc")
+                        .onSnapshot(this.onCollectionUpdate);*/
+                });
+
+            } else {
+                this.setState({
+                    isConnected: false,
+                });
+
+                // update offline alert system message
+                offlineAlert = {
                     _id: 1,
-                    text: 'Hello developer',
-                    createdAt: new Date(),
-                    user: {
-                        _id: 2,
-                        name: 'React Native',
-                        avatar: 'https://placeimg.com/140/140/any',
-                    },
-                },
-                {
-                    _id: 2,
-                    text: 'This is a system message',
-                    createdAt: new Date(),
+                    text: "You are currently offline. Messages can't be updated or sent.",
                     system: true,
-                },
-            ],
-        })*/
+                };
+                // get messages from local storage if not online
+                this.getMessages();
+            }
+        });
         this.referenceChatMessages = firebase.firestore().collection("messages");
         //this.unsubscribe = this.referenceChatMessages.onSnapshot(this.onCollectionUpdate);
 
-        this.authUnsubscribe = firebase.auth().onAuthStateChanged((user) => {
-            if (!user) {
-                firebase.auth().signInAnonymously();
-            }
-            this.setState({
-                uid: user.uid,
-                messages: [],
-                user: {
-                    _id: user.uid,
-                    name: name,
-                },
-                loggedInText: "Hello there!"
-            });
-            this.referenceChatMessagesUser = firebase.firestore().collection("messages").where("uid", "==", this.state.uid);
-            this.unsubscribeMessagesUser = this.referenceChatMessagesUser.onSnapshot(this.onCollectionUpdate);
-            /*this.unsubscribe = this.referenceChatMessages
-                .orderBy("createdAt", "desc")
-                .onSnapshot(this.onCollectionUpdate);*/
-        });
     }
+
     componentWillUnmount() {
         this.authUnsubscribe();
         this.unsubscribeMessagesUser();
     }
 
+
     onSend(messages = []) {
         this.setState(previousState => ({
             messages: GiftedChat.append(previousState.messages, messages),
-        }))
+        }), () => {
+            this.saveMessages();
+        });
     }
 
     renderBubble(props) {
@@ -150,9 +204,21 @@ export default class Chat extends React.Component {
         )
     }
 
+    //render the default InputToolbar only when the user is online
+    renderInputToolbar(props) {
+        if (this.state.isConnected === false) {
+        } else {
+            return <InputToolbar {...props} />;
+        }
+    }
 
-
-
+    // custom system message when offline
+    renderSystemMessage(props) {
+        if (!this.state.isConnected) {
+            return <SystemMessage {...props} textStyle={styles.systemMessage} />;
+        } else {
+        }
+    }
 
     render() {
         let color = this.props.route.params.color;
@@ -161,7 +227,11 @@ export default class Chat extends React.Component {
                 <Text>{this.state.loggedInText}</Text>
                 <GiftedChat
                     renderBubble={this.renderBubble.bind(this)}
-                    messages={this.state.messages}
+                    renderInputToolbar={this.renderInputToolbar.bind(this)}
+                    renderSystemMessage={this.renderSystemMessage.bind(this)}
+                    messages={this.state.isConnected
+                        ? this.state.messages
+                        : [offlineAlert, ...this.state.messages]}
                     onSend={messages => this.onSend(messages)}
                     user={{
                         _id: this.state.uid,
@@ -186,6 +256,9 @@ const styles = StyleSheet.create({
     },
     text: {
         fontSize: 30,
-    }
+    },
+    systemMessage: {
+        color: "red",
+    },
 });
 
